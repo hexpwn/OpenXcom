@@ -44,6 +44,7 @@
 #include "BriefingState.h"
 #include "ExtendedBattlescapeLinksState.h"
 #include "../lodepng.h"
+#include <climits>
 #include "../Geoscape/SelectMusicTrackState.h"
 #include "../Engine/Game.h"
 #include "../Engine/Options.h"
@@ -104,7 +105,8 @@ BattlescapeState::BattlescapeState() :
 	_xBeforeMouseScrolling(0), _yBeforeMouseScrolling(0),
 	_totalMouseMoveX(0), _totalMouseMoveY(0), _mouseMovedOverThreshold(0), _mouseOverIcons(false),
 	_autosave(0),
-	_numberOfDirectlyVisibleUnits(0), _numberOfEnemiesTotal(0), _numberOfEnemiesTotalPlusWounded(0)
+	_numberOfDirectlyVisibleUnits(0), _numberOfEnemiesTotal(0), _numberOfEnemiesTotalPlusWounded(0),
+	_fpsOverlay(nullptr), _fpsOverlayUnit(nullptr), _fpsOverlayDir(-1), _fpsOverlayDirty(false)
 {
 	_save = _game->getSavedGame()->getSavedBattle();
 
@@ -877,6 +879,12 @@ void BattlescapeState::think()
 			{
 				_battleGame->handleNonTargetAction();
 				popped = false;
+			}
+			// Flush deferred FPS overlay update now that movement has ended
+			if (_fpsOverlayDirty && _fpsOverlay != nullptr && _fpsOverlay->getVisible() && !_battleGame->isBusy())
+			{
+				_fpsOverlayDirty = false;
+				updateFpsOverlay(true);
 			}
 		}
 		else
@@ -2390,6 +2398,19 @@ void BattlescapeState::updateSoldierInfo(bool checkFOV)
 	}
 
 	updateUiButton(battleUnit);
+
+	// Auto-refresh the FPS overlay when soldier or facing direction changes (skip while game is busy/animating)
+	if (_fpsOverlay != nullptr && _fpsOverlay->getVisible())
+	{
+		const int dir = battleUnit ? battleUnit->getDirection() : -1;
+		if (battleUnit != _fpsOverlayUnit || dir != _fpsOverlayDir)
+		{
+			if (_battleGame->isBusy())
+				_fpsOverlayDirty = true;  // defer until movement ends
+			else
+				updateFpsOverlay(true);
+		}
+	}
 }
 
 void BattlescapeState::updateUiButton(const BattleUnit *battleUnit)
@@ -3145,10 +3166,13 @@ inline void BattlescapeState::handle(Action *action)
 					}
 				}
 
-				// voxel view dump
+				// voxel view dump / display
 				if (key == Options::keyBattleVoxelView)
 				{
-					saveVoxelView();
+					if (shiftPressed)
+						updateFpsOverlay(); // toggle overlay, no file I/O
+					else
+						saveVoxelView();    // save PNG for external viewer
 				}
 			}
 		}
@@ -3414,6 +3438,186 @@ void BattlescapeState::saveVoxelView()
 	}
 	CrossPlatform::writeFile(ss.str(), out);
 	return;
+}
+
+/**
+ * Generates a voxel image, converts it to the screen palette, and shows it
+ * as an overlay on the battlescape. Toggles off if already visible (unless
+ * forceShow is true). No file I/O.
+ */
+void BattlescapeState::updateFpsOverlay(bool forceShow)
+{
+	// Create the overlay surface once and register it with the State
+	if (_fpsOverlay == nullptr)
+	{
+		const int size = Screen::ORIGINAL_HEIGHT / 1.3; // 200
+		const int x    = (Screen::ORIGINAL_WIDTH * 0.10);
+		const int y    = (Screen::ORIGINAL_HEIGHT * 0.10);
+		_fpsOverlay = new Surface(size, size, x, y);
+		_fpsOverlay->setVisible(false);
+		add(_fpsOverlay);
+	}
+
+	// Without forceShow: toggle off if already visible
+	if (!forceShow && _fpsOverlay->getVisible())
+	{
+		_fpsOverlay->setVisible(false);
+		_fpsOverlayUnit = nullptr;
+		_fpsOverlayDir  = -1;
+		return;
+	}
+
+	// Render first-person voxel view into a raw RGB buffer
+	static const unsigned char pal[30]=
+	//			ground		west wall	north wall		object		enemy unit						xcom unit	neutral unit
+	{0,0,0, 224,224,224,  192,224,255,  255,224,192, 128,255,128, 255,0,64,  0,0,0, 255,255,255,  0,64,255,  255,64,128 };
+
+	BattleUnit *bu = _save->getSelectedUnit();
+	if (bu == 0) return;
+
+	// Build palette lookup table once per call: palLut[colorIdx][brightness 0..255] -> screen palette index.
+	// This replaces the O(256) nearest-color search per pixel with a simple array lookup.
+	const SDL_Color *screenPal = _game->getScreen()->getPalette();
+	Uint8 palLut[10][256];
+	for (int ci = 0; ci < 10; ++ci)
+	{
+		for (int bi = 0; bi < 256; ++bi)
+		{
+			const int r = (pal[ci*3+0] * bi) / 255;
+			const int g = (pal[ci*3+1] * bi) / 255;
+			const int b = (pal[ci*3+2] * bi) / 255;
+			int bestIdx = 1, bestDist = INT_MAX;
+			for (int c = 1; c < 256; ++c)
+			{
+				const int dr = (int)screenPal[c].r - r;
+				const int dg = (int)screenPal[c].g - g;
+				const int db = (int)screenPal[c].b - b;
+				const int d = dr*dr + dg*dg + db*db;
+				if (d < bestDist) { bestDist = d; bestIdx = c; if (d == 0) break; }
+			}
+			palLut[ci][bi] = (Uint8)bestIdx;
+		}
+	}
+
+	std::vector<Position> _trajectory;
+	_trajectory.reserve(500);
+
+	bool black;
+	Tile *tile = 0;
+	int test;
+	Position originVoxel = _save->getTileEngine()->getSightOriginVoxel(bu);
+	Position targetVoxel, hitPos;
+	double dist = 0;
+	bool _debug = _save->getDebugMode();
+	double dir = ((double)bu->getDirection()+4)/4*M_PI;
+
+	// Precompute orthographic direction constants (invariant over the whole frame)
+	const double sinDirP = sin(dir + M_PI_2);
+	const double cosDirP = cos(dir + M_PI_2);
+
+	SDL_Surface *dst = _fpsOverlay->getSurface();
+	const int imgSize = _fpsOverlay->getWidth();
+
+	SDL_LockSurface(dst);
+
+	// Render directly at output resolution (imgSize x imgSize) instead of 512x512,
+	// mapping each output pixel to the equivalent ray in the original coordinate space.
+	for (int oy = 0; oy < imgSize; ++oy)
+	{
+		const int y = (-256 + 32) + oy * 512 / imgSize;
+		double sinAngY = 0, cosAngY = 0;
+		if (Options::oxceFirstPersonViewFisheyeProjection)
+		{
+			// Hoist sin/cos(ang_y) out of the inner loop; ang_y depends only on y
+			const double ang_y = ((double)y / 640 * M_PI + M_PI / 2);
+			sinAngY = sin(ang_y);
+			cosAngY = cos(ang_y);
+		}
+
+		for (int ox = 0; ox < imgSize; ++ox)
+		{
+			const int x = -256 + ox * 512 / imgSize;
+
+			if (Options::oxceFirstPersonViewFisheyeProjection)
+			{
+				const double ang_x = ((double)x / 1024) * M_PI + dir;
+				targetVoxel.x = originVoxel.x + (int)(-sin(ang_x) * 1024 * sinAngY);
+				targetVoxel.y = originVoxel.y + (int)(cos(ang_x) * 1024 * sinAngY);
+				targetVoxel.z = originVoxel.z + (int)(cosAngY * 1024);
+			}
+			else
+			{
+				// sinDirP/cosDirP are precomputed once per frame
+				targetVoxel.x = originVoxel.x + (int)(-sinDirP * (x * 4) + cosDirP * (1024 + 512));
+				targetVoxel.y = originVoxel.y + (int)(cosDirP * (x * 4) + sinDirP * (1024 + 512));
+				targetVoxel.z = originVoxel.z + -y * 4;
+			}
+
+			_trajectory.clear();
+			test = _save->getTileEngine()->calculateLineVoxel(originVoxel, targetVoxel, false, &_trajectory, bu, nullptr, !_debug) +1;
+			black = true;
+			if (test!=0 && test!=6)
+			{
+				tile = _save->getTile(_trajectory.at(0).toTile());
+				if (_debug
+					|| (tile->isDiscovered(O_WESTWALL) && test == 2)
+					|| (tile->isDiscovered(O_NORTHWALL) && test == 3)
+					|| (tile->isDiscovered(O_FLOOR) && (test == 1 || test == 4))
+					|| test==5
+					)
+				{
+					if (test==5)
+					{
+						if (tile->getUnit())
+						{
+							if (tile->getUnit()->getFaction()==FACTION_NEUTRAL) test=9;
+							else
+							if (tile->getUnit()->getFaction()==FACTION_PLAYER) test=8;
+						}
+						else
+						{
+							tile = _save->getBelowTile(tile);
+							if (tile && tile->getUnit())
+							{
+								if (tile->getUnit()->getFaction()==FACTION_NEUTRAL) test=9;
+								else
+								if (tile->getUnit()->getFaction()==FACTION_PLAYER) test=8;
+							}
+						}
+					}
+					hitPos = _trajectory.at(0);
+					dist = Position::distance(hitPos, originVoxel);
+					black = false;
+				}
+			}
+
+			if (black)
+			{
+				dist = 0;
+			}
+			else
+			{
+				if (dist>1000) dist=1000;
+				if (dist<1) dist=1;
+				dist=(1000-(log(dist))*140)/700;//140
+
+				if (hitPos.x%16==15) dist*=0.9;
+				if (hitPos.y%16==15) dist*=0.9;
+				if (hitPos.z%24==23) dist*=0.9;
+				if (dist > 1) dist = 1;
+				if (tile) dist *= (16 - (double)tile->getShade())/16;
+			}
+
+			// Write palette index directly using precomputed LUT
+			static_cast<Uint8*>(dst->pixels)[oy * dst->pitch + ox] = palLut[test][(int)(dist * 255)];
+		}
+	}
+
+	SDL_UnlockSurface(dst);
+
+	_fpsOverlay->setVisible(true);
+	_fpsOverlayUnit = _save->getSelectedUnit();
+	_fpsOverlayDir  = _fpsOverlayUnit ? _fpsOverlayUnit->getDirection() : -1;
 }
 
 /**

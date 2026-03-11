@@ -97,6 +97,10 @@ private:
 	Uint8 _barHealthColor;
 	int _autosave;
 	int _numberOfDirectlyVisibleUnits, _numberOfEnemiesTotal, _numberOfEnemiesTotalPlusWounded;
+	Surface *_fpsOverlay;
+	BattleUnit *_fpsOverlayUnit;
+	int _fpsOverlayDir;
+	bool _fpsOverlayDirty;
 	Uint8 _indicatorTextColor, _indicatorGreen, _indicatorBlue, _indicatorPurple;
 	/// Popups a context sensitive list of actions the user can choose from.
 	void handleItemClick(BattleItem *item, bool rightClick);
@@ -258,6 +262,8 @@ public:
 	void saveVoxelMap();
 	/// Saves a first-person voxel view of the battlescape.
 	void saveVoxelView();
+	/// Generates a voxel image and shows it as an overlay; toggles off if forceShow is false.
+	void updateFpsOverlay(bool forceShow = false);
 	/// Handler for the mouse moving over the icons, disables the tile selection cube.
 	void mouseInIcons(Action *action);
 	/// Handler for the mouse going out of the icons, enabling the tile selection cube.
