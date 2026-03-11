@@ -106,7 +106,7 @@ BattlescapeState::BattlescapeState() :
 	_totalMouseMoveX(0), _totalMouseMoveY(0), _mouseMovedOverThreshold(0), _mouseOverIcons(false),
 	_autosave(0),
 	_numberOfDirectlyVisibleUnits(0), _numberOfEnemiesTotal(0), _numberOfEnemiesTotalPlusWounded(0),
-	_fpsOverlay(nullptr), _fpsOverlayUnit(nullptr), _fpsOverlayDir(-1), _fpsOverlayDirty(false)
+	_fpsOverlay(nullptr), _fpsOverlayUnit(nullptr), _fpsOverlayDir(-1), _fpsOverlayPos(Position(-1,-1,-1)), _fpsOverlayDirty(false)
 {
 	_save = _game->getSavedGame()->getSavedBattle();
 
@@ -2399,11 +2399,12 @@ void BattlescapeState::updateSoldierInfo(bool checkFOV)
 
 	updateUiButton(battleUnit);
 
-	// Auto-refresh the FPS overlay when soldier or facing direction changes (skip while game is busy/animating)
+	// Auto-refresh the FPS overlay when soldier, facing direction, or position changes (skip while game is busy/animating)
 	if (_fpsOverlay != nullptr && _fpsOverlay->getVisible())
 	{
 		const int dir = battleUnit ? battleUnit->getDirection() : -1;
-		if (battleUnit != _fpsOverlayUnit || dir != _fpsOverlayDir)
+		const Position pos = battleUnit ? battleUnit->getPosition() : Position(-1,-1,-1);
+		if (battleUnit != _fpsOverlayUnit || dir != _fpsOverlayDir || pos != _fpsOverlayPos)
 		{
 			if (_battleGame->isBusy())
 				_fpsOverlayDirty = true;  // defer until movement ends
@@ -3464,6 +3465,7 @@ void BattlescapeState::updateFpsOverlay(bool forceShow)
 		_fpsOverlay->setVisible(false);
 		_fpsOverlayUnit = nullptr;
 		_fpsOverlayDir  = -1;
+		_fpsOverlayPos  = Position(-1,-1,-1);
 		return;
 	}
 
@@ -3618,6 +3620,7 @@ void BattlescapeState::updateFpsOverlay(bool forceShow)
 	_fpsOverlay->setVisible(true);
 	_fpsOverlayUnit = _save->getSelectedUnit();
 	_fpsOverlayDir  = _fpsOverlayUnit ? _fpsOverlayUnit->getDirection() : -1;
+	_fpsOverlayPos  = _fpsOverlayUnit ? _fpsOverlayUnit->getPosition() : Position(-1,-1,-1);
 }
 
 /**

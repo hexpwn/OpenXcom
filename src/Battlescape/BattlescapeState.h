@@ -100,6 +100,7 @@ private:
 	Surface *_fpsOverlay;
 	BattleUnit *_fpsOverlayUnit;
 	int _fpsOverlayDir;
+	Position _fpsOverlayPos;
 	bool _fpsOverlayDirty;
 	Uint8 _indicatorTextColor, _indicatorGreen, _indicatorBlue, _indicatorPurple;
 	/// Popups a context sensitive list of actions the user can choose from.
