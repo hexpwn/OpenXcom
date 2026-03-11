@@ -3451,7 +3451,7 @@ void BattlescapeState::updateFpsOverlay(bool forceShow)
 	// Create the overlay surface once and register it with the State
 	if (_fpsOverlay == nullptr)
 	{
-		const int size = Screen::ORIGINAL_HEIGHT / 1.3; // 200
+		const int size = std::min((int)(Screen::ORIGINAL_HEIGHT / 1.3), Options::baseYResolution * 2 / 5);
 		const int x    = (Screen::ORIGINAL_WIDTH * 0.10);
 		const int y    = (Screen::ORIGINAL_HEIGHT * 0.10);
 		_fpsOverlay = new Surface(size, size, x, y);
