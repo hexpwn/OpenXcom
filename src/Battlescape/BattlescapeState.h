@@ -102,6 +102,8 @@ private:
 	int _fpsOverlayDir;
 	Position _fpsOverlayPos;
 	bool _fpsOverlayDirty;
+	bool _fpsOverlayWasVisible;
+	int _fpsOverlayLastSide;
 	Uint8 _indicatorTextColor, _indicatorGreen, _indicatorBlue, _indicatorPurple;
 	/// Popups a context sensitive list of actions the user can choose from.
 	void handleItemClick(BattleItem *item, bool rightClick);
@@ -265,6 +267,8 @@ public:
 	void saveVoxelView();
 	/// Generates a voxel image and shows it as an overlay; toggles off if forceShow is false.
 	void updateFpsOverlay(bool forceShow = false);
+	/// Hides or restores the FPS overlay based on whose turn it is.
+	void setFpsOverlayForTurn(bool isPlayerTurn);
 	/// Handler for the mouse moving over the icons, disables the tile selection cube.
 	void mouseInIcons(Action *action);
 	/// Handler for the mouse going out of the icons, enabling the tile selection cube.

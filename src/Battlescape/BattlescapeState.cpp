@@ -106,7 +106,7 @@ BattlescapeState::BattlescapeState() :
 	_totalMouseMoveX(0), _totalMouseMoveY(0), _mouseMovedOverThreshold(0), _mouseOverIcons(false),
 	_autosave(0),
 	_numberOfDirectlyVisibleUnits(0), _numberOfEnemiesTotal(0), _numberOfEnemiesTotalPlusWounded(0),
-	_fpsOverlay(nullptr), _fpsOverlayUnit(nullptr), _fpsOverlayDir(-1), _fpsOverlayPos(Position(-1,-1,-1)), _fpsOverlayDirty(false)
+	_fpsOverlay(nullptr), _fpsOverlayUnit(nullptr), _fpsOverlayDir(-1), _fpsOverlayPos(Position(-1,-1,-1)), _fpsOverlayDirty(false), _fpsOverlayWasVisible(false), _fpsOverlayLastSide(FACTION_PLAYER)
 {
 	_save = _game->getSavedGame()->getSavedBattle();
 
@@ -879,6 +879,15 @@ void BattlescapeState::think()
 			{
 				_battleGame->handleNonTargetAction();
 				popped = false;
+			}
+			// Hide FPS overlay during enemy turns; restore when player's turn begins
+			{
+				int currentSide = _save->getSide();
+				if (currentSide != _fpsOverlayLastSide)
+				{
+					_fpsOverlayLastSide = currentSide;
+					setFpsOverlayForTurn(currentSide == FACTION_PLAYER);
+				}
 			}
 			// Flush deferred FPS overlay update now that movement has ended
 			if (_fpsOverlayDirty && _fpsOverlay != nullptr && _fpsOverlay->getVisible() && !_battleGame->isBusy())
@@ -3621,6 +3630,30 @@ void BattlescapeState::updateFpsOverlay(bool forceShow)
 	_fpsOverlayUnit = _save->getSelectedUnit();
 	_fpsOverlayDir  = _fpsOverlayUnit ? _fpsOverlayUnit->getDirection() : -1;
 	_fpsOverlayPos  = _fpsOverlayUnit ? _fpsOverlayUnit->getPosition() : Position(-1,-1,-1);
+}
+
+/**
+ * Hides the FPS overlay at the start of an enemy turn and restores it at the
+ * start of the player's turn.
+ * @param isPlayerTurn True if the player's turn is starting.
+ */
+void BattlescapeState::setFpsOverlayForTurn(bool isPlayerTurn)
+{
+	if (_fpsOverlay == nullptr) return;
+
+	if (!isPlayerTurn)
+	{
+		_fpsOverlayWasVisible = _fpsOverlay->getVisible();
+		if (_fpsOverlayWasVisible)
+		{
+			_fpsOverlay->setVisible(false);
+		}
+	}
+	else if (_fpsOverlayWasVisible)
+	{
+		_fpsOverlayWasVisible = false;
+		updateFpsOverlay(true);
+	}
 }
 
 /**
