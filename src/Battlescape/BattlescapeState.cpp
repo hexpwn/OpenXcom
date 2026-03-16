@@ -3643,9 +3643,9 @@ void BattlescapeState::setFpsOverlayForTurn(bool isPlayerTurn)
 
 	if (!isPlayerTurn)
 	{
-		_fpsOverlayWasVisible = _fpsOverlay->getVisible();
-		if (_fpsOverlayWasVisible)
+		if (_fpsOverlay->getVisible())
 		{
+			_fpsOverlayWasVisible = true;
 			_fpsOverlay->setVisible(false);
 		}
 	}
